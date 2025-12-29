@@ -14,38 +14,40 @@ CORS(app, expose_headers=["X-Reference-Image", "X-Histogram-Data"])
 REFERENCE_FOLDER = "ref"
 
 
-def gray2rgb(gray_img, color_img):
+def gray2rgb(gray_img, color_img, alpha=0.4):
+    """
+    alpha: controls strength of reference color
+           0.0 = pure grayscale
+           0.2 = very subtle color hint
+           0.5 = moderate color
+           1.0 = full reference color
+    """
     if len(gray_img.shape) == 3:
         gray_img = cv2.cvtColor(gray_img, cv2.COLOR_BGR2GRAY)
 
-    gray_rgb = cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR)
+    color_img = cv2.resize(color_img, (gray_img.shape[1], gray_img.shape[0]), interpolation=cv2.INTER_AREA)
 
-    ycbcr_color = cv2.cvtColor(color_img, cv2.COLOR_BGR2YCrCb)
-    ycbcr_gray = cv2.cvtColor(gray_rgb, cv2.COLOR_BGR2YCrCb)
+    gray_ycc = cv2.cvtColor(cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR), cv2.COLOR_BGR2YCrCb)
+    color_ycc = cv2.cvtColor(color_img, cv2.COLOR_BGR2YCrCb)
 
-    ms = ycbcr_color[:, :, 0].astype(np.float32)
-    mt = ycbcr_gray[:, :, 0].astype(np.float32)
+    Yg = gray_ycc[:, :, 0].astype(np.float32)
+    Cr_ref = color_ycc[:, :, 1].astype(np.float32)
+    Cb_ref = color_ycc[:, :, 2].astype(np.float32)
 
-    d1 = ms.max() - ms.min()
-    d2 = mt.max() - mt.min()
+    # Smooth reference chroma to avoid noise
+    Cr_smooth = cv2.GaussianBlur(Cr_ref, (3,3), 0)
+    Cb_smooth = cv2.GaussianBlur(Cb_ref, (3,3), 0)
 
-    dx1 = (ms * 255) / (255 - d1 + 1e-6)
-    dx2 = (mt * 255) / (255 - d2 + 1e-6)
+    # Blend chroma: smaller alpha → subtle color
+    Cr_out = ((1 - alpha) * 128 + alpha * Cr_smooth).astype(np.uint8)
+    Cb_out = ((1 - alpha) * 128 + alpha * Cb_smooth).astype(np.uint8)
 
-    h, w = dx2.shape
-    nimage = np.zeros_like(ycbcr_gray)
+    out_ycc = np.zeros_like(color_ycc)
+    out_ycc[:, :, 0] = Yg
+    out_ycc[:, :, 1] = Cr_out
+    out_ycc[:, :, 2] = Cb_out
 
-    for i in range(h):
-        for j in range(w):
-            iy = dx2[i, j]
-            diff = np.abs(dx1 - iy)
-            r, c = np.unravel_index(np.argmin(diff), diff.shape)
-
-            nimage[i, j, 0] = ycbcr_gray[i, j, 0]
-            nimage[i, j, 1] = ycbcr_color[r, c, 1]
-            nimage[i, j, 2] = ycbcr_color[r, c, 2]
-
-    return cv2.cvtColor(nimage.astype(np.uint8), cv2.COLOR_YCrCb2BGR)
+    return cv2.cvtColor(out_ycc, cv2.COLOR_YCrCb2BGR)
 
 
 def calculate_histogram(image, is_normalized=True):
