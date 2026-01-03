@@ -107,6 +107,10 @@ def colorize():
 
     gray_file = request.files["gray"]
     gray_filename = gray_file.filename
+    
+    # Get alpha and chroma_boost parameters from form data
+    alpha = float(request.form.get("alpha", 1.0))
+    chroma_boost = float(request.form.get("chroma_boost", 1.5))
 
     # Find matching reference image
     ref_path = find_reference_image(gray_filename)
@@ -134,8 +138,8 @@ def colorize():
         # Calculate grayscale histogram (raw values, not normalized)
         gray_histogram = calculate_histogram(gray_img, is_normalized=False)
 
-        # Colorize the image
-        result = gray2rgb(gray_img, ref_img)
+        # Colorize the image with custom parameters
+        result = gray2rgb(gray_img, ref_img, alpha=alpha, chroma_boost=chroma_boost)
 
         # Calculate color histogram (raw values, not normalized)
         color_histogram = calculate_histogram(result, is_normalized=False)
@@ -158,14 +162,14 @@ def colorize():
         # Send reference image name and histogram data in headers
         response.headers["X-Reference-Image"] = os.path.basename(ref_path)
         response.headers["X-Histogram-Data"] = json.dumps(histogram_data)
+        response.headers["X-Alpha"] = str(alpha)
+        response.headers["X-Chroma-Boost"] = str(chroma_boost)
         
         return response
 
     except Exception as e:
         print(f"Error during colorization: {str(e)}")
         return jsonify({"error": f"Processing failed: {str(e)}"}), 500
-
-
 @app.route("/upload_reference", methods=["POST"])
 def upload_reference():
     if "image" not in request.files:
