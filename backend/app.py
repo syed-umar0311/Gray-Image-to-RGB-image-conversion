@@ -14,40 +14,45 @@ CORS(app, expose_headers=["X-Reference-Image", "X-Histogram-Data"])
 REFERENCE_FOLDER = "ref"
 
 
-def gray2rgb(gray_img, color_img, alpha=0.4):
-    """
-    alpha: controls strength of reference color
-           0.0 = pure grayscale
-           0.2 = very subtle color hint
-           0.5 = moderate color
-           1.0 = full reference color
-    """
+def gray2rgb(gray_img, color_img, alpha=1.0, chroma_boost=1.5):
+
     if len(gray_img.shape) == 3:
         gray_img = cv2.cvtColor(gray_img, cv2.COLOR_BGR2GRAY)
 
-    color_img = cv2.resize(color_img, (gray_img.shape[1], gray_img.shape[0]), interpolation=cv2.INTER_AREA)
+    color_img = cv2.resize(
+        color_img,
+        (gray_img.shape[1], gray_img.shape[0]),
+        interpolation=cv2.INTER_AREA
+    )
 
-    gray_ycc = cv2.cvtColor(cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR), cv2.COLOR_BGR2YCrCb)
-    color_ycc = cv2.cvtColor(color_img, cv2.COLOR_BGR2YCrCb)
+    gray_bgr = cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR)
+    gray_lab = cv2.cvtColor(gray_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    ref_lab = cv2.cvtColor(color_img, cv2.COLOR_BGR2LAB).astype(np.float32)
 
-    Yg = gray_ycc[:, :, 0].astype(np.float32)
-    Cr_ref = color_ycc[:, :, 1].astype(np.float32)
-    Cb_ref = color_ycc[:, :, 2].astype(np.float32)
+    Lg, _, _ = cv2.split(gray_lab)
+    _, Ar, Br = cv2.split(ref_lab)
 
-    # Smooth reference chroma to avoid noise
-    Cr_smooth = cv2.GaussianBlur(Cr_ref, (3,3), 0)
-    Cb_smooth = cv2.GaussianBlur(Cb_ref, (3,3), 0)
+    ref_mean, ref_std = cv2.meanStdDev(ref_lab)
 
-    # Blend chroma: smaller alpha → subtle color
-    Cr_out = ((1 - alpha) * 128 + alpha * Cr_smooth).astype(np.uint8)
-    Cb_out = ((1 - alpha) * 128 + alpha * Cb_smooth).astype(np.uint8)
+    # Statistical + spatial chroma
+    Ar_stat = (Ar - ref_mean[1]) * (ref_std[1] / (np.std(Ar) + 1e-6)) + ref_mean[1]
+    Br_stat = (Br - ref_mean[2]) * (ref_std[2] / (np.std(Br) + 1e-6)) + ref_mean[2]
 
-    out_ycc = np.zeros_like(color_ycc)
-    out_ycc[:, :, 0] = Yg
-    out_ycc[:, :, 1] = Cr_out
-    out_ycc[:, :, 2] = Cb_out
+    A_out = (1 - alpha) * 128 + alpha * (0.6 * Ar + 0.4 * Ar_stat)
+    B_out = (1 - alpha) * 128 + alpha * (0.6 * Br + 0.4 * Br_stat)
 
-    return cv2.cvtColor(out_ycc, cv2.COLOR_YCrCb2BGR)
+    A_out = 128 + chroma_boost * (A_out - 128)
+    B_out = 128 + chroma_boost * (B_out - 128)
+
+    # 🔴 FIX: ensure same dtype
+    Lg = Lg.astype(np.float32)
+    A_out = np.clip(A_out, 0, 255).astype(np.float32)
+    B_out = np.clip(B_out, 0, 255).astype(np.float32)
+
+    out_lab = cv2.merge([Lg, A_out, B_out])
+    out_lab = out_lab.astype(np.uint8)
+
+    return cv2.cvtColor(out_lab, cv2.COLOR_LAB2BGR)
 
 
 def calculate_histogram(image, is_normalized=True):
@@ -117,6 +122,7 @@ def colorize():
         gray_file.seek(0)  # Reset file pointer
         gray_bytes = np.frombuffer(gray_file.read(), np.uint8)
         gray_img = cv2.imdecode(gray_bytes, cv2.IMREAD_UNCHANGED)
+        gray_img = cv2.cvtColor(gray_img, cv2.COLOR_BGR2GRAY) if len(gray_img.shape) == 3 else gray_img
 
         ref_img = cv2.imread(ref_path)
 
